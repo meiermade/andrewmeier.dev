@@ -27,6 +27,7 @@ let browserE2ETests =
                     "https://andymeier.dev"
                     "deployed"
                     (Some BrowserE2E.AnalyticsMode.DefaultOn)
+                    "true"
 
             Expect.equal command.executable "docker" "container runtime"
             Expect.equal command.workingDirectory "/repo/e2e" "E2E directory"
@@ -36,6 +37,7 @@ let browserE2ETests =
                   "--init"
                   "--ipc=host"
                   "CI=true"
+                  "E2E_ANALYTICS_ENABLED=true"
                   "E2E_SCOPE=deployed"
                   "SITE_E2E_BASE_URL=https://andymeier.dev"
                   "E2E_EXPECTED_ANALYTICS_MODE=default-on"
@@ -45,6 +47,24 @@ let browserE2ETests =
                   "--retries=0" ]
                 "pinned production browser plan"
             Expect.isFalse (command.arguments |> List.contains "playwright") "does not install or invoke a global Playwright CLI"
+        }
+
+        test "local acceptance explicitly selects analytics for both browser and server" {
+            for enabled in [ "false"; "true" ] do
+                let server = BrowserE2E.localServerCommand "/repo" "http://127.0.0.1:5051" enabled
+                let native = BrowserE2E.nativePlaywrightCommand "/repo/e2e" "http://127.0.0.1:5051" enabled
+                let container = BrowserE2E.playwrightCommand "/repo/e2e" image "http://127.0.0.1:5051" "local" None enabled
+                Expect.equal server.environment["ANALYTICS_ENABLED"] enabled "server switch is explicit"
+                Expect.equal server.environment["PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"] "https://otel.test" "intercepted public endpoint"
+                Expect.equal native.environment["E2E_ANALYTICS_ENABLED"] enabled "native browser suite"
+                Expect.contains container.arguments $"E2E_ANALYTICS_ENABLED={enabled}" "container browser suite"
+        }
+
+        test "production explicitly enables browser analytics without changing server export" {
+            let root = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "../../.."))
+            let deployment = File.ReadAllText(Path.Combine(root, "pulumi/src/k8s/deployment.ts"))
+            Expect.stringContains deployment "{ name: 'ANALYTICS_ENABLED', value: 'true' }" "production opt-in is deliberate"
+            Expect.stringContains deployment "{ name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: config.openTelemetryConfig.endpoint }" "server export stays independent"
         }
 
         test "builds deterministic Cloudflare Trace requests" {

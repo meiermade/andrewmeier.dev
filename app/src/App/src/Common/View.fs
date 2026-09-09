@@ -429,7 +429,7 @@ module Analytics =
         }
 
 type Document =
-    static member primary (metadata:PageMetadata, page:HtmlElement, otelEndpoint:string, privacyPolicy:App.Privacy.BrowserPolicy, ?selectedNav:string) =
+    static member primary (metadata:PageMetadata, page:HtmlElement, otelEndpoint:string option, privacyPolicy:App.Privacy.BrowserPolicy, ?selectedNav:string) =
         let selectedNav = defaultArg selectedNav ""
 
         html {
@@ -450,8 +450,11 @@ type Document =
                     _type "module"
                     _src (Asset.fingerprinted "/scripts/privacy.js")
                     _data ("analytics-mode", App.Privacy.analyticsModeValue privacyPolicy)
-                    _data ("otel-endpoint", otelEndpoint)
-                    _data ("telemetry-src", Asset.fingerprinted "/scripts/telemetry.js")
+                    match otelEndpoint with
+                    | Some endpoint ->
+                        _data ("otel-endpoint", endpoint)
+                        _data ("telemetry-src", Asset.fingerprinted "/scripts/telemetry.js")
+                    | None -> ()
                 }
                 link { _href (Asset.fingerprinted "/css/compiled.css"); _rel "stylesheet" }
                 link { _href (Asset.fingerprinted "/css/prism.css"); _rel "stylesheet" }

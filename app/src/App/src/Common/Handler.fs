@@ -56,7 +56,7 @@ let patchPage (ctx:HttpContext) (ds:IDatastarService) (metadata:PageMetadata) (p
 let renderPage (services:Services) (metadata:PageMetadata) (page:HtmlElement) (selectedNav:string) : HttpHandler =
     fun next ctx -> task {
         let privacyPolicy = App.Privacy.fromRequest ctx
-        let doc = Document.primary(metadata, page, services.config.openTelemetry.publicEndpoint, privacyPolicy, selectedNav)
+        let doc = Document.primary(metadata, page, services.config.analytics.otelEndpoint, privacyPolicy, selectedNav)
         let html = Render.toHtmlDocString doc
         return! htmlString html next ctx
     }
