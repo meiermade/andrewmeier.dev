@@ -4,8 +4,6 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Net.Http
-open System.Net.Http.Headers
-open System.Text
 open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
@@ -71,25 +69,6 @@ let nativePlaywrightCommand e2eDirectory baseUrl analyticsEnabled =
                   "E2E_SCOPE", "local"
                   "SITE_E2E_BASE_URL", baseUrl ] }
 
-let pulumiConfigCommand pulumiDirectory stack key =
-    { BuildProcess.create "pulumi" [ "config"; "get"; key; "--stack"; stack ] with
-        workingDirectory = pulumiDirectory
-        timeout = TimeSpan.FromMinutes 1. }
-
-let traceRequestBody (url:string) countryCode =
-    JsonSerializer.Serialize(
-        {| method = "GET"
-           url = url
-           context = {| geoloc = {| iso_code = countryCode |} |}
-           skip_response = false |})
-
-let traceOriginStatus (responseJson:string) =
-    use document = JsonDocument.Parse responseJson
-    let root = document.RootElement
-    if not (root.GetProperty("success").GetBoolean()) then
-        invalidOp "Cloudflare Request Trace reported an unsuccessful API result."
-    root.GetProperty("result").GetProperty("status_code").GetInt32()
-
 let countryFromEdgeTrace (content:string) =
     content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
     |> Array.tryPick (fun line ->
@@ -102,14 +81,6 @@ let private runLogged log command =
     if not (String.IsNullOrWhiteSpace result.standardOutput) then log result.standardOutput
     if not (String.IsNullOrWhiteSpace result.standardError) then log result.standardError
     result
-
-let private readPulumiConfig pulumiDirectory stack key =
-    pulumiConfigCommand pulumiDirectory stack key
-    |> BuildProcess.runChecked BuildProcess.run
-    |> _.standardOutput
-    |> fun value ->
-        if String.IsNullOrWhiteSpace value then invalidOp $"Pulumi config {key} is empty."
-        value
 
 let private waitForEndpoint log (url:string) =
     use client = new HttpClient(Timeout = TimeSpan.FromSeconds 5.)
@@ -191,26 +162,6 @@ let runLocal log rootDirectory e2eDirectory image baseUrl stateDirectory =
         finally
             stopProcess server
 
-let private verifyCloudflareTrace log accountId apiToken baseUrl countryCode expectedMode =
-    use client = new HttpClient(Timeout = TimeSpan.FromSeconds 30.)
-    client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", apiToken)
-    let expected = modeValue expectedMode
-    let checkUrl = $"{baseUrl}/privacy/policy-check/{expected}"
-    use content = new StringContent(traceRequestBody checkUrl countryCode, Encoding.UTF8, "application/json")
-    use response =
-        client.PostAsync(
-            $"https://api.cloudflare.com/client/v4/accounts/{accountId}/request-tracer/trace",
-            content)
-            .GetAwaiter()
-            .GetResult()
-    let responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-    if not response.IsSuccessStatusCode then
-        invalidOp $"Cloudflare Request Trace returned HTTP {int response.StatusCode}: {responseBody}"
-    let originStatus = traceOriginStatus responseBody
-    if originStatus <> 200 then
-        invalidOp $"Cloudflare {countryCode} trace expected {expected}, but the origin returned HTTP {originStatus}."
-    log $"Cloudflare {countryCode} trace verified {expected}."
-
 let private verifyActualUsContext log baseUrl =
     use client = new HttpClient(Timeout = TimeSpan.FromSeconds 15.)
     let trace = client.GetStringAsync($"{baseUrl}/cdn-cgi/trace").GetAwaiter().GetResult()
@@ -220,13 +171,11 @@ let private verifyActualUsContext log baseUrl =
         let actual = country |> Option.defaultValue "unknown"
         invalidOp $"Expected a U.S. deployed browser context, received {actual}."
 
-let runPublished log e2eDirectory pulumiDirectory stack image baseUrl =
+let runPublished log e2eDirectory image baseUrl =
     waitForEndpoint log $"{baseUrl}/health"
     runLogged log (npmInstallCommand e2eDirectory) |> ignore
-    let accountId = readPulumiConfig pulumiDirectory stack "cloudflare:accountId"
-    let apiToken = readPulumiConfig pulumiDirectory stack "cloudflare:apiToken"
-    verifyCloudflareTrace log accountId apiToken baseUrl "US" AnalyticsMode.DefaultOn
-    verifyCloudflareTrace log accountId apiToken baseUrl "DE" AnalyticsMode.OptIn
+    use client = new HttpClient(Timeout = TimeSpan.FromSeconds 15.)
+    (RegionalAnalytics.verify log client baseUrl).GetAwaiter().GetResult()
     verifyActualUsContext log baseUrl
     playwrightCommand e2eDirectory image baseUrl "deployed" (Some AnalyticsMode.DefaultOn) "true"
     |> runLogged log
