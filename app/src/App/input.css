@@ -4,6 +4,10 @@
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
 
+#page-content:focus {
+    outline: none;
+}
+
 .article-scroll-progress {
     display: none;
 }

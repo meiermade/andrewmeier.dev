@@ -78,6 +78,7 @@ test('internal navigation preserves history and restores entry scroll positions'
   await expect(page).toHaveTitle('Articles | Andy Meier')
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://andymeier.dev/articles')
   await expect(page.locator('#page-content')).toBeFocused()
+  await expect(page.locator('#page-content')).toHaveCSS('outline-style', 'none')
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
   expect(await page.evaluate(() => (window as Window & { documentMarker?: string }).documentMarker)).toBe(documentMarker)
 
