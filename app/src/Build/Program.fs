@@ -8,7 +8,6 @@ open System.Net
 open System.Net.Sockets
 open System.Security.Cryptography
 open System.Text.Json
-open System.Threading.Tasks
 
 Environment.GetCommandLineArgs()
 |> Array.tail
@@ -44,6 +43,8 @@ let hashFileContents (filePath:string) =
     |> Convert.ToHexString
     |> fun hash -> hash.ToLowerInvariant().Substring(0, 12)
 
+let inline (==>!) x y = x ==> y |> ignore
+
 let fingerprintAssets (root:string) =
     let files =
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
@@ -62,15 +63,6 @@ let fingerprintAssets (root:string) =
 
     let manifestPath = Path.Combine(root, "asset-manifest.json")
     File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest))
-
-let inline (==>!) x y = x ==> y |> ignore
-
-let execEnv command workDir env args =
-    CreateProcess.fromRawCommand command args
-    |> CreateProcess.withWorkingDirectory workDir
-    |> CreateProcess.withEnvironmentMap env
-    |> CreateProcess.ensureExitCode
-    |> Proc.start
 
 let exec command workDir args =
     CreateProcess.fromRawCommand command args
@@ -96,31 +88,8 @@ let playwrightImage () =
     BrowserE2E.verifyPlaywrightImage packageVersion image
     image
 
-Target.create "StartDeps" <| fun _ ->
-    Trace.trace "Starting dependencies (seq)"
-    exec "docker-compose" rootDir [ "up"; "-d"; "seq" ] |> Task.WaitAll
-
-Target.create "EnsureDevCert" <| fun _ ->
-    Trace.trace "Ensuring trusted ASP.NET Core HTTPS development certificate"
-    exec "dotnet" rootDir [ "dev-certs"; "https"; "--trust" ] |> Task.WaitAll
-
 Target.create "Watch" <| fun _ ->
-    let serverUrl = $"https://localhost:{availableLocalPort ()}"
-    Trace.trace $"Starting local server at {serverUrl}"
-
-    let env =
-        Map.ofList [
-            "ASPNETCORE_ENVIRONMENT", "Development"
-            "SERVER_URL", serverUrl
-        ]
-        |> EnvMap.ofMap
-
-    exec "npm" appDir [ "ci"; "--ignore-scripts" ] |> _.Wait()
-    let watchPrism = exec "npm" appDir [ "run"; "build:prism"; "--"; "--watch" ]
-    let watchTelemetry = exec "npm" appDir [ "run"; "build:telemetry"; "--"; "--watch" ]
-    let watchCss = exec "tailwindcss" appDir [ "--input"; "./input.css"; "--output"; "./wwwroot/css/compiled.css"; "--watch" ]
-    let watchServer = execEnv "dotnet" appDir env [ "watch"; "run"; "--no-restore" ]
-    Task.WaitAny(watchPrism, watchTelemetry, watchCss, watchServer) |> ignore
+    LocalWatch.run Trace.trace appDir
 
 Target.create "BuildCss" <| fun _ ->
     exec "tailwindcss" appDir [ "--input"; "./input.css"; "--output"; "./wwwroot/css/compiled.css"; "--minify" ]
@@ -165,8 +134,6 @@ Target.create "Publish" <| fun _ ->
 
 Target.create "Default" (fun _ -> Target.listAvailable())
 
-"StartDeps" ==>! "EnsureDevCert"
-"EnsureDevCert" ==>! "Watch"
 "BuildBrowser" ==>! "Publish"
 "BuildCss" ==>! "Publish"
 "BuildBrowser" ==>! "TestE2E"
