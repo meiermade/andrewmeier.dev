@@ -201,21 +201,10 @@ let browserE2ETests =
 
 let localWatchTests =
     testList "Local Watch configuration" [
-        test "keeps the stable URL and normalizes exact loopback overrides" {
+        test "keeps one stable target and ownership record across worktrees" {
             Expect.equal LocalWatch.defaultUrl "http://127.0.0.1:5290" "reserved site URL"
-            Expect.equal (LocalWatch.validateUrl LocalWatch.defaultUrl) LocalWatch.defaultUrl "valid default"
-            Expect.equal (LocalWatch.validateUrl "http://127.0.0.1:6000/") "http://127.0.0.1:6000" "normalized override"
-            Expect.equal (LocalWatch.validateUrl "http://127.0.0.1:80") "http://127.0.0.1:80" "explicit default port is retained"
-        }
-        test "rejects unsafe or non-exact loopback URLs" {
-            for url in [
-                "https://localhost:5290"; "http://localhost:5290"; "http://0.0.0.0:5290"
-                "http://127.0.0.1"; "http://127.0.0.1/"; "http://127.0.0.1:0"
-                "http://u:p@127.0.0.1:5290"; "http://127.0.0.1:5290/path"
-                "http://127.0.0.1:5290?q=1"; "http://127.0.0.1:5290#x"; "http://127.1:5290"
-                "http://2130706433:5290"; "http://127.0.0.1:5290/../"; "garbage"
-            ] do
-                Expect.throws (fun () -> LocalWatch.validateUrl url |> ignore) $"invalid override: {url}"
+            Expect.equal LocalWatch.defaultPort 5290 "reserved site port"
+            Expect.equal (Path.GetFileName (LocalWatch.watcherPidFile "watch")) "andymeier-watch.pid" "one Watch target"
         }
         test "parses ownership records without losing the exact start identity" {
             for identity in [ "utc:639245672027002926"; "linux:boot-id:123456" ] do

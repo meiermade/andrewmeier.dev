@@ -18,22 +18,10 @@ let prismArguments = [ "run"; "build:prism"; "--"; "--watch=forever" ]
 let telemetryArguments = [ "run"; "build:telemetry"; "--"; "--watch=forever" ]
 let cssArguments = [ "--input"; "./input.css"; "--output"; "./wwwroot/css/compiled.css"; "--watch=always" ]
 
+[<Literal>]
+let defaultPort = 5290
+
 type Ownership = { pid:int; startIdentity:string }
-
-let validateUrl (url:string) =
-    match Uri.TryCreate(url, UriKind.Absolute) with
-    | true, uri when uri.Scheme = "http" && uri.Host = "127.0.0.1" && uri.Port > 0
-                     && uri.UserInfo = "" && uri.AbsolutePath = "/" && uri.Query = "" && uri.Fragment = ""
-                     && Text.RegularExpressions.Regex.IsMatch(url, @"\Ahttp://127\.0\.0\.1:[0-9]+/?\z") ->
-        $"{uri.Scheme}://{uri.Host}:{uri.Port}"
-    | _ -> invalidArg (nameof url) "Watch URL must be an exact http://127.0.0.1 URL with a nonzero port and no credentials, path, query, or fragment."
-
-let configuredUrl () =
-    Environment.GetEnvironmentVariable "ANDYMEIER_SERVER_URL"
-    |> Option.ofObj
-    |> Option.filter (String.IsNullOrWhiteSpace >> not)
-    |> Option.defaultValue defaultUrl
-    |> validateUrl
 
 let watcherPidFile watcherName =
     Path.Combine(Path.GetTempPath(), $"andymeier-{watcherName}.pid")
@@ -86,23 +74,21 @@ let stopExistingWatcher trace watcherName =
     | None -> ()
     File.Delete(watcherPidFile watcherName)
 
-let waitForPortAvailable watcherName serverUrl (timeout:TimeSpan) (token:CancellationToken) =
-    let uri = Uri(validateUrl serverUrl)
+let waitForPortAvailable watcherName (timeout:TimeSpan) (token:CancellationToken) =
     let elapsed = Stopwatch.StartNew()
     let rec wait () =
         token.ThrowIfCancellationRequested()
         try
-            use listener = new TcpListener(IPAddress.Loopback, uri.Port)
+            use listener = new TcpListener(IPAddress.Loopback, defaultPort)
             listener.Start()
         with :? SocketException ->
             if elapsed.Elapsed >= timeout then
-                invalidOp $"{watcherName} cannot start because {serverUrl} is already in use. Stop its owner, then retry."
+                invalidOp $"{watcherName} cannot start because {defaultUrl} is already in use. Stop its owner, then retry."
             token.WaitHandle.WaitOne(100) |> ignore
             wait ()
     wait ()
 
-let runExclusiveWatcher trace watcherName serverUrl run =
-    let serverUrl = validateUrl serverUrl
+let runExclusiveWatcher trace watcherName run =
     use cancellation = new CancellationTokenSource()
     let cancelHandler = ConsoleCancelEventHandler(fun _ event -> event.Cancel <- true; cancellation.Cancel())
     Console.CancelKeyPress.AddHandler cancelHandler
@@ -114,7 +100,7 @@ let runExclusiveWatcher trace watcherName serverUrl run =
         else PosixSignalRegistration.Create(PosixSignal.SIGINT, fun context -> context.Cancel <- true; cancellation.Cancel())
     try
         stopExistingWatcher trace watcherName
-        waitForPortAvailable watcherName serverUrl (TimeSpan.FromSeconds 5.) cancellation.Token
+        waitForPortAvailable watcherName (TimeSpan.FromSeconds 5.) cancellation.Token
         use current = Process.GetCurrentProcess()
         let ownership = processOwnership current
         File.WriteAllText(watcherPidFile watcherName, formatOwnership ownership)
@@ -200,13 +186,13 @@ let waitForHealth (client:HttpClient) serverUrl timeout (token:CancellationToken
         invalidOp $"Andy Meier did not become healthy at {serverUrl} within {timeout}."
 
 let run trace workDir =
-    let serverUrl = configuredUrl ()
+    let serverUrl = defaultUrl
     let environment = Map [
         "ANALYTICS_ENABLED", "false"
         "ASPNETCORE_ENVIRONMENT", "Development"
         "DOTNET_USE_POLLING_FILE_WATCHER", "1"
         "SERVER_URL", serverUrl ]
-    runExclusiveWatcher trace "watch" serverUrl (fun token ->
+    runExclusiveWatcher trace "watch" (fun token ->
         runPreparation token (processDefinition workDir "dotnet" [ "restore" ] Map.empty)
         runPreparation token (processDefinition workDir "npm" [ "ci"; "--ignore-scripts" ] Map.empty)
         runForegroundProcesses token [
