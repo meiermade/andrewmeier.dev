@@ -205,11 +205,13 @@ let localWatchTests =
             Expect.equal LocalWatch.defaultUrl "http://127.0.0.1:5290" "reserved site URL"
             Expect.equal (LocalWatch.validateUrl LocalWatch.defaultUrl) LocalWatch.defaultUrl "valid default"
             Expect.equal (LocalWatch.validateUrl "http://127.0.0.1:6000/") "http://127.0.0.1:6000" "normalized override"
+            Expect.equal (LocalWatch.validateUrl "http://127.0.0.1:80") "http://127.0.0.1:80" "explicit default port is retained"
         }
         test "rejects unsafe or non-exact loopback URLs" {
             for url in [
                 "https://localhost:5290"; "http://localhost:5290"; "http://0.0.0.0:5290"
-                "http://127.0.0.1:0"; "http://u:p@127.0.0.1:5290"; "http://127.0.0.1:5290/path"
+                "http://127.0.0.1"; "http://127.0.0.1/"; "http://127.0.0.1:0"
+                "http://u:p@127.0.0.1:5290"; "http://127.0.0.1:5290/path"
                 "http://127.0.0.1:5290?q=1"; "http://127.0.0.1:5290#x"; "http://127.1:5290"
                 "http://2130706433:5290"; "http://127.0.0.1:5290/../"; "garbage"
             ] do

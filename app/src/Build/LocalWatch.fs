@@ -24,8 +24,8 @@ let validateUrl (url:string) =
     match Uri.TryCreate(url, UriKind.Absolute) with
     | true, uri when uri.Scheme = "http" && uri.Host = "127.0.0.1" && uri.Port > 0
                      && uri.UserInfo = "" && uri.AbsolutePath = "/" && uri.Query = "" && uri.Fragment = ""
-                     && Text.RegularExpressions.Regex.IsMatch(url, @"\Ahttp://127\.0\.0\.1(?::[0-9]+)?/?\z") ->
-        uri.GetLeftPart(UriPartial.Authority)
+                     && Text.RegularExpressions.Regex.IsMatch(url, @"\Ahttp://127\.0\.0\.1:[0-9]+/?\z") ->
+        $"{uri.Scheme}://{uri.Host}:{uri.Port}"
     | _ -> invalidArg (nameof url) "Watch URL must be an exact http://127.0.0.1 URL with a nonzero port and no credentials, path, query, or fragment."
 
 let configuredUrl () =
