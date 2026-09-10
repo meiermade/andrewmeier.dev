@@ -22,7 +22,6 @@ let rootDir = Path.getDirectory srcDir
 let repoDir = Path.getDirectory rootDir
 let appDir = srcDir </> "App"
 let e2eDir = repoDir </> "e2e"
-let pulumiDir = repoDir </> "pulumi"
 let outDir = appDir </> "out"
 let wwwrootDir = outDir </> "wwwroot"
 let hashedAssetExtensions =
@@ -151,8 +150,6 @@ Target.create "VerifyPublishedAnalytics" <| fun _ ->
     BrowserE2E.runPublished
         Trace.trace
         e2eDir
-        pulumiDir
-        (environmentValue "PULUMI_STACK" "meiermade/andymeier/prod")
         (playwrightImage ())
         (environmentValue "SITE_E2E_BASE_URL" "https://andymeier.dev")
 

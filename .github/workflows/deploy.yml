@@ -64,7 +64,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
       - name: Setup .NET
@@ -83,16 +82,9 @@ jobs:
           dotnet tool restore
           dotnet paket restore
           dotnet restore src/Build/Build.fsproj
-      - name: Authenticate Pulumi
-        uses: pulumi/auth-actions@v2
-        with:
-          organization: meiermade
-          requested-token-type: urn:pulumi:token-type:access_token:personal
-          scope: user:meiermade
       - name: Verify published regional analytics
         working-directory: ./app
         env:
-          PULUMI_STACK: meiermade/andymeier/prod
           SITE_E2E_BASE_URL: https://andymeier.dev
         run: ./fake.sh VerifyPublishedAnalytics --single-target
       - name: Upload E2E diagnostics

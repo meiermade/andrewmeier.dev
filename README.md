@@ -45,3 +45,9 @@ Article assets are manually published and cached, so changing an image requires 
 cd app
 ./fake.sh Test
 ```
+
+After deployment, `./fake.sh VerifyPublishedAnalytics --single-target` verifies real regional requests through [Check-Host's HTTP API](https://check-host.net/about/api), then runs the existing Firefox acceptance suite from a Cloudflare-confirmed U.S. runner. The regional check uses two German nodes and one U.S. node, validates their returned countries, and checks both policy endpoints: the intended mode must return 200 and the opposite mode must return 409.
+
+Only public, read-only `/privacy/policy-check/...` URLs are submitted to Check-Host; results are public. No credentials, cookies, personal data, forged country headers, new cloud resources, Cloudflare API tokens, Pulumi authentication, or OIDC are used by the E2E job. Cloudflare Request Trace's synthetic geography is not evidence of the origin country: it can disagree with real-region behavior. Provider failures, missing/wrong-country nodes, timeouts, rate limits, and unexpected statuses fail the gate.
+
+Both regional modes share one 60-second overall deadline and use at most 20 polls per mode. Every request after the first waits two seconds, including the first result poll and creating the next mode's check. This observed interval avoids immediate Check-Host rate limits; 429 remains a failure rather than a retry. Diagnostics include only API phase, status, and Retry-After—not bodies or credentials. Provider availability is a deployment-acceptance dependency, never a reason to skip the real geography checks.

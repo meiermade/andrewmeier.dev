@@ -2,11 +2,39 @@ module Build.Tests.Program
 
 open Expecto
 open System
+open System.Collections.Generic
+open System.Diagnostics
 open System.IO
-open System.Text.Json
+open System.Net
+open System.Net.Http
+open System.Threading.Tasks
 
 let private packageJson = """{"devDependencies":{"@playwright/test":"1.62.1"}}"""
 let private image = "mcr.microsoft.com/playwright:v1.62.1-noble@sha256:abc123"
+let private accepted = """{"ok":1,"request_id":"sample1","nodes":{"de1.node.check-host.net":["de","Germany","Nuremberg"],"de4.node.check-host.net":["de","Germany","Frankfurt"],"us1.node.check-host.net":["us","USA","Los Angeles"]}}"""
+let private results de1 de4 us =
+    sprintf """{"de1.node.check-host.net":%s,"de4.node.check-host.net":%s,"us1.node.check-host.net":%s}""" de1 de4 us
+let private row status = $"[[1,0.1,\"response\",{status}]]"
+let private optIn = results (row "200") (row "\"200\"") (row "\"409\"")
+let private defaultOn = results (row "409") (row "\"409\"") (row "200")
+
+type private ProbeHandler(responses:(HttpStatusCode * string) list) =
+    inherit HttpMessageHandler()
+    let pending = Queue<HttpStatusCode * string>(responses)
+    let requests = ResizeArray<Uri>()
+    let requestTimes = ResizeArray<int64>()
+    member _.Requests = requests |> Seq.toList
+    member _.RequestGaps =
+        requestTimes |> Seq.pairwise |> Seq.map (fun (first, second) -> Stopwatch.GetElapsedTime(first, second))
+    override _.SendAsync(request, _) =
+        requestTimes.Add(Stopwatch.GetTimestamp())
+        Expect.equal request.Method HttpMethod.Get "probes are read-only"
+        Expect.isNull request.Headers.Authorization "no credentials sent to the probe service"
+        Expect.isFalse (request.Headers.Contains "CF-IPCountry") "no forged country header"
+        Expect.equal request.RequestUri.Host "check-host.net" "only the documented probe API"
+        requests.Add request.RequestUri
+        let status, body = pending.Dequeue()
+        Task.FromResult(new HttpResponseMessage(status, Content = new StringContent(body)))
 
 let browserE2ETests =
     testList "Browser E2E build automation" [
@@ -67,48 +95,89 @@ let browserE2ETests =
             Expect.stringContains deployment "{ name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: config.openTelemetryConfig.endpoint }" "server export stays independent"
         }
 
-        test "builds deterministic Cloudflare Trace requests" {
-            let body =
-                BrowserE2E.traceRequestBody
-                    "https://andymeier.dev/privacy/policy-check/opt-in"
-                    "DE"
-            use document = JsonDocument.Parse body
-            let root = document.RootElement
-
-            Expect.equal (root.GetProperty("method").GetString()) "GET" "method"
-            Expect.equal
-                (root.GetProperty("context").GetProperty("geoloc").GetProperty("iso_code").GetString())
-                "DE"
-                "simulated country"
-            Expect.equal
-                (root.GetProperty("url").GetString())
-                "https://andymeier.dev/privacy/policy-check/opt-in"
-                "policy expectation"
-            Expect.isFalse (root.GetProperty("skip_response").GetBoolean()) "origin is exercised"
+        test "selects real German and US nodes for a public HTTPS policy check" {
+            let url = RegionalAnalytics.checkUrl "https://andymeier.dev/" "opt-in"
+            Expect.stringContains url "host=https%3A%2F%2Fandymeier.dev%2Fprivacy%2Fpolicy-check%2Fopt-in" "public URL"
+            for node in [ "de1"; "de4"; "us1" ] do
+                Expect.stringContains url $"node={node}.node.check-host.net" "explicit probe node"
+            for site in [ "http://example.com"; "https://secret@example.com"; "https://example.com?token=secret"; "https://example.com#secret" ] do
+                Expect.throws (fun () -> RegionalAnalytics.checkUrl site "opt-in" |> ignore) "rejects insecure or credential-bearing URLs"
+            Expect.throws (fun () -> RegionalAnalytics.checkUrl "https://example.com" "unknown" |> ignore) "unknown policy mode"
         }
 
-        test "reads the supported origin status and edge country" {
-            let response = """{"success":true,"result":{"status_code":200,"trace":[]}}"""
-            Expect.equal (BrowserE2E.traceOriginStatus response) 200 "origin status"
+        test "requires the expected nodes to still be in the requested countries" {
+            Expect.equal (RegionalAnalytics.acceptedRequest accepted) "sample1" "request ID"
+            for invalid in [ accepted.Replace("\"de\"", "\"us\""); accepted.Replace("\"ok\":1", "\"ok\":0"); accepted.Replace("sample1", "") ] do
+                Expect.throws (fun () -> RegionalAnalytics.acceptedRequest invalid |> ignore) "cannot silently substitute geography or an invalid request"
+        }
+
+        test "requires positive and opposite-mode results and handles numeric or string statuses" {
+            Expect.isTrue (RegionalAnalytics.resultsReady "opt-in" optIn) "Germany opts in and US rejects that expectation"
+            Expect.isTrue (RegionalAnalytics.resultsReady "default-on" defaultOn) "US defaults on and Germany rejects that expectation"
+            Expect.throws (fun () -> RegionalAnalytics.resultsReady "opt-in" defaultOn |> ignore) "wrong consent policy fails"
+            Expect.throws (fun () -> RegionalAnalytics.resultsReady "opt-in" (results (row "200") (row "200") (row "200")) |> ignore) "an always-200 endpoint cannot pass"
+        }
+
+        test "pending, missing, malformed, and failed probes cannot pass" {
+            Expect.isFalse (RegionalAnalytics.resultsReady "opt-in" (results "null" (row "200") (row "409"))) "pending is not success"
+            for response in [ "{}"; results "[]" (row "200") (row "409"); results "[[0,0.1,\"Timeout\"]]" (row "200") (row "409"); results (row "500") (row "200") (row "409"); results (row "null") (row "200") (row "409") ] do
+                Expect.throws (fun () -> RegionalAnalytics.resultsReady "opt-in" response |> ignore) "fails closed"
+        }
+
+        test "runs both regional checks through the HTTP boundary and paces requests" {
+            use handler = new ProbeHandler([
+                HttpStatusCode.OK, accepted
+                HttpStatusCode.OK, results "null" (row "200") (row "409")
+                HttpStatusCode.OK, optIn
+                HttpStatusCode.OK, accepted
+                HttpStatusCode.OK, defaultOn ])
+            use client = new HttpClient(handler)
+            (RegionalAnalytics.verify ignore client "https://andymeier.dev").GetAwaiter().GetResult()
+            Expect.equal handler.Requests.Length 5 "one pending poll plus both checks"
+            Expect.stringContains handler.Requests.[0].Query "opt-in" "first policy expectation"
+            Expect.stringContains handler.Requests.[3].Query "default-on" "second policy expectation"
+            for gap in handler.RequestGaps do
+                Expect.isGreaterThanOrEqual gap (TimeSpan.FromMilliseconds 1900.) "pace first poll, repeated polls, and next-mode creation"
+        }
+
+        test "probe service unavailability fails verification rather than skipping geography" {
+            use handler = new ProbeHandler([ HttpStatusCode.ServiceUnavailable, "unavailable" ])
+            use client = new HttpClient(handler)
+            let mutable failed = false
+            try (RegionalAnalytics.verify ignore client "https://andymeier.dev").GetAwaiter().GetResult()
+            with :? HttpRequestException -> failed <- true
+            Expect.isTrue failed "provider failure propagates"
+        }
+
+        test "poll rate limiting is diagnosed and fails without retrying or logging bodies" {
+            use handler = new ProbeHandler([ HttpStatusCode.OK, accepted; HttpStatusCode.TooManyRequests, "private response sentinel" ])
+            use client = new HttpClient(handler)
+            let logs = ResizeArray<string>()
+            let mutable failed = false
+            try (RegionalAnalytics.verify logs.Add client "https://andymeier.dev").GetAwaiter().GetResult()
+            with :? HttpRequestException as error -> failed <- error.StatusCode = Nullable HttpStatusCode.TooManyRequests
+            Expect.isTrue failed "429 propagates rather than passing or retrying"
+            Expect.equal handler.Requests.Length 2 "one creation and one poll; no retry"
+            Expect.contains logs "Regional probe API poll: HTTP 429; Retry-After=absent." "failed boundary identified"
+            Expect.isFalse (logs |> Seq.exists (fun line -> line.Contains "private response sentinel")) "response body stays out of logs"
+        }
+
+        test "exhausted polling fails closed after the fixed attempt budget" {
+            let pending = results "null" "null" "null"
+            use handler = new ProbeHandler((HttpStatusCode.OK, accepted) :: List.replicate 20 (HttpStatusCode.OK, pending))
+            use client = new HttpClient(handler)
+            let mutable failure = ""
+            try (RegionalAnalytics.verify ignore client "https://andymeier.dev").GetAwaiter().GetResult()
+            with :? InvalidOperationException as error -> failure <- error.Message
+            Expect.stringContains failure "did not finish within 20 polls" "incomplete geography is not a pass"
+            Expect.equal handler.Requests.Length 21 "one request plus exactly twenty result polls"
+        }
+
+        test "still verifies the actual deployed browser runner country" {
             Expect.equal
                 (BrowserE2E.countryFromEdgeTrace "colo=BOS\nloc=US\ntls=TLSv1.3\n")
                 (Some "US")
                 "edge location"
-        }
-
-        test "reads Cloudflare credentials from the fully qualified Pulumi stack" {
-            let command =
-                BrowserE2E.pulumiConfigCommand
-                    "/repo/pulumi"
-                    "meiermade/andymeier/prod"
-                    "cloudflare:apiToken"
-
-            Expect.equal command.executable "pulumi" "Pulumi CLI"
-            Expect.equal command.workingDirectory "/repo/pulumi" "Pulumi project"
-            Expect.sequenceEqual
-                command.arguments
-                [ "config"; "get"; "cloudflare:apiToken"; "--stack"; "meiermade/andymeier/prod" ]
-                "config lookup"
         }
 
         test "keeps browser and region orchestration out of workflows" {
@@ -122,6 +191,9 @@ let browserE2ETests =
                 Expect.isFalse (workflow.Contains("Install Tor", StringComparison.Ordinal)) "Tor installation is absent"
                 Expect.isFalse (workflow.Contains("cdn-cgi/trace", StringComparison.Ordinal)) "location scripting is absent"
 
+            let e2eJob = deploy.Substring(deploy.IndexOf("  e2e:", StringComparison.Ordinal))
+            Expect.isFalse (e2eJob.Contains("Authenticate Pulumi", StringComparison.Ordinal)) "E2E no longer loads cloud credentials"
+            Expect.isFalse (e2eJob.Contains("id-token: write", StringComparison.Ordinal)) "E2E needs no identity token"
             Expect.stringContains deploy "./fake.sh VerifyPublishedAnalytics" "deploy delegates to Build"
             Expect.stringContains preview "./fake.sh TestE2E" "preview delegates to Build"
         }
