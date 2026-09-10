@@ -199,5 +199,30 @@ let browserE2ETests =
         }
     ]
 
+let localWatchTests =
+    testList "Local Watch configuration" [
+        test "keeps the stable URL and normalizes exact loopback overrides" {
+            Expect.equal LocalWatch.defaultUrl "http://127.0.0.1:5290" "reserved site URL"
+            Expect.equal (LocalWatch.validateUrl LocalWatch.defaultUrl) LocalWatch.defaultUrl "valid default"
+            Expect.equal (LocalWatch.validateUrl "http://127.0.0.1:6000/") "http://127.0.0.1:6000" "normalized override"
+        }
+        test "rejects unsafe or non-exact loopback URLs" {
+            for url in [
+                "https://localhost:5290"; "http://localhost:5290"; "http://0.0.0.0:5290"
+                "http://127.0.0.1:0"; "http://u:p@127.0.0.1:5290"; "http://127.0.0.1:5290/path"
+                "http://127.0.0.1:5290?q=1"; "http://127.0.0.1:5290#x"; "http://127.1:5290"
+                "http://2130706433:5290"; "http://127.0.0.1:5290/../"; "garbage"
+            ] do
+                Expect.throws (fun () -> LocalWatch.validateUrl url |> ignore) $"invalid override: {url}"
+        }
+        test "parses ownership records without losing the exact start identity" {
+            for identity in [ "utc:639245672027002926"; "linux:boot-id:123456" ] do
+                let ownership:LocalWatch.Ownership = { pid = 123; startIdentity = identity }
+                Expect.equal (LocalWatch.formatOwnership ownership |> LocalWatch.parseOwnership) (Some ownership) "round trip"
+            for malformed in [ ""; "junk"; "123"; "-1|start"; "0|start"; "2147483648|start"; "123|"; "123|start|extra" ] do
+                Expect.isNone (LocalWatch.parseOwnership malformed) "malformed record ignored"
+        }
+    ]
+
 [<EntryPoint>]
-let main args = runTestsWithCLIArgs [] args browserE2ETests
+let main args = runTestsWithCLIArgs [] args (testList "Build" [ browserE2ETests; localWatchTests ])

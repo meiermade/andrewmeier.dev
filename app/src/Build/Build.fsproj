@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Process.fs" />
+    <Compile Include="LocalWatch.fs" />
     <Compile Include="RegionalAnalytics.fs" />
     <Compile Include="BrowserE2E.fs" />
     <Compile Include="Program.fs" />

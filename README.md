@@ -23,6 +23,10 @@ dotnet paket restore
 
 Articles are authored directly in `app/src/App/src/Articles/Posts` with FSharp.ViewEngine. `Watch` uses those source-controlled articles and requires no content-service credentials.
 
+`Watch` serves the single review URL `http://127.0.0.1:5290` after `/health` succeeds. It neither starts Docker/Seq nor needs a trusted TLS certificate. It owns and replaces only a prior Andy Meier Watch process tree across worktrees, supervises Prism, telemetry, Tailwind and .NET together, and removes owned siblings on Ctrl-C, SIGTERM or unexpected child exit. Browser analytics is explicitly disabled for Watch; server observability remains configured independently.
+
+For an exceptional local conflict, `ANDYMEIER_SERVER_URL` accepts only an exact `http://127.0.0.1:<nonzero-port>` URL (a trailing slash is normalized). Credentials, paths, query strings, fragments, hostname aliases, HTTPS and alternate bind addresses are rejected. An unrelated listener is never terminated; Watch reports the occupied URL instead.
+
 ### Browser analytics
 
 Browser analytics is disabled when `ANALYTICS_ENABLED` is absent or `false`, including normal local development. Disabled pages retain usable consent controls but omit the public endpoint and telemetry-module attributes; accepting consent cannot enable telemetry in this environment.
