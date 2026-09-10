@@ -23,6 +23,14 @@ dotnet paket restore
 
 Articles are authored directly in `app/src/App/src/Articles/Posts` with FSharp.ViewEngine. `Watch` uses those source-controlled articles and requires no content-service credentials.
 
+### Browser analytics
+
+Browser analytics is disabled when `ANALYTICS_ENABLED` is absent or `false`, including normal local development. Disabled pages retain usable consent controls but omit the public endpoint and telemetry-module attributes; accepting consent cannot enable telemetry in this environment.
+
+To test browser analytics explicitly, set both `ANALYTICS_ENABLED=true` and `PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` to your intended public collector. An enabled environment without the endpoint fails startup. This switch only makes browser analytics available: the existing regional policy and visitor choice still govern collection and withdrawal.
+
+Server logs, traces, and metrics use `OTEL_EXPORTER_OTLP_ENDPOINT` independently; the browser switch does not disable server observability. Production explicitly enables browser analytics in its deployment environment. `cd app && ./fake.sh TestE2E` runs a disabled-server acceptance suite first, then the enabled consent/article suite using intercepted browser OTLP requests.
+
 ## Publishing articles
 
 1. Add a post module under `app/src/App/src/Articles/Posts` and register it in `Articles/Catalog.fs`.

@@ -53,6 +53,7 @@ const deployment = new k8s.apps.v1.Deployment('app', {
                             { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' },
                             { name: 'SERVER_URL', value: 'http://0.0.0.0:5000' },
                             { name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: config.openTelemetryConfig.endpoint },
+                            { name: 'ANALYTICS_ENABLED', value: 'true' },
                             { name: 'PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT', value: config.openTelemetryConfig.publicEndpoint },
                         ],
                         resources: {

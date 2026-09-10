@@ -37,9 +37,10 @@ let npmInstallCommand e2eDirectory =
         workingDirectory = e2eDirectory
         timeout = TimeSpan.FromMinutes 5. }
 
-let playwrightCommand e2eDirectory image baseUrl scope expectedMode =
+let playwrightCommand e2eDirectory image baseUrl scope expectedMode analyticsEnabled =
     let environment =
         [ "--env"; "CI=true"
+          "--env"; $"E2E_ANALYTICS_ENABLED={analyticsEnabled}"
           "--env"; $"E2E_SCOPE={scope}"
           "--env"; $"SITE_E2E_BASE_URL={baseUrl}" ]
         @ (expectedMode
@@ -61,11 +62,12 @@ let playwrightCommand e2eDirectory image baseUrl scope expectedMode =
             "--retries=0" ]) with
         workingDirectory = e2eDirectory }
 
-let nativePlaywrightCommand e2eDirectory baseUrl =
+let nativePlaywrightCommand e2eDirectory baseUrl analyticsEnabled =
     { BuildProcess.create "npm" [ "test"; "--"; "--project=firefox"; "--retries=0" ] with
         workingDirectory = e2eDirectory
         environment =
             Map [ "CI", "true"
+                  "E2E_ANALYTICS_ENABLED", analyticsEnabled
                   "E2E_SCOPE", "local"
                   "SITE_E2E_BASE_URL", baseUrl ] }
 
@@ -152,14 +154,15 @@ let private stopProcess (child:Process) =
             child.WaitForExit(5000) |> ignore
     with :? InvalidOperationException -> ()
 
-let localServerCommand rootDirectory baseUrl =
+let localServerCommand rootDirectory baseUrl analyticsEnabled =
     { BuildProcess.create "dotnet" [
         "run"
         "--no-build"
         "--project"; Path.Combine(rootDirectory, "app", "src", "App", "App.fsproj") ] with
         workingDirectory = Path.Combine(rootDirectory, "app")
         environment =
-            Map [ "ASPNETCORE_ENVIRONMENT", "Development"
+            Map [ "ANALYTICS_ENABLED", analyticsEnabled
+                  "ASPNETCORE_ENVIRONMENT", "Development"
                   "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318"
                   "PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.test"
                   "SERVER_URL", baseUrl ] }
@@ -172,20 +175,21 @@ let runLocal log rootDirectory e2eDirectory image baseUrl stateDirectory =
     runLogged log (buildAppCommand rootDirectory) |> ignore
     runLogged log (npmInstallCommand e2eDirectory) |> ignore
     Directory.CreateDirectory stateDirectory |> ignore
-    let logPath = Path.Combine(stateDirectory, "server.log")
-    use writer = new StreamWriter(logPath, append = false, AutoFlush = true)
-    use server = startProcess (localServerCommand rootDirectory baseUrl) writer
+    for analyticsEnabled in [ "false"; "true" ] do
+        let logPath = Path.Combine(stateDirectory, $"server-analytics-{analyticsEnabled}.log")
+        use writer = new StreamWriter(logPath, append = false, AutoFlush = true)
+        use server = startProcess (localServerCommand rootDirectory baseUrl analyticsEnabled) writer
 
-    try
-        waitForEndpoint log $"{baseUrl}/health"
-        let command =
-            if OperatingSystem.IsLinux() then
-                playwrightCommand e2eDirectory image baseUrl "local" None
-            else
-                nativePlaywrightCommand e2eDirectory baseUrl
-        runLogged log command |> ignore
-    finally
-        stopProcess server
+        try
+            waitForEndpoint log $"{baseUrl}/health"
+            let command =
+                if OperatingSystem.IsLinux() then
+                    playwrightCommand e2eDirectory image baseUrl "local" None analyticsEnabled
+                else
+                    nativePlaywrightCommand e2eDirectory baseUrl analyticsEnabled
+            runLogged log command |> ignore
+        finally
+            stopProcess server
 
 let private verifyCloudflareTrace log accountId apiToken baseUrl countryCode expectedMode =
     use client = new HttpClient(Timeout = TimeSpan.FromSeconds 30.)
@@ -224,6 +228,6 @@ let runPublished log e2eDirectory pulumiDirectory stack image baseUrl =
     verifyCloudflareTrace log accountId apiToken baseUrl "US" AnalyticsMode.DefaultOn
     verifyCloudflareTrace log accountId apiToken baseUrl "DE" AnalyticsMode.OptIn
     verifyActualUsContext log baseUrl
-    playwrightCommand e2eDirectory image baseUrl "deployed" (Some AnalyticsMode.DefaultOn)
+    playwrightCommand e2eDirectory image baseUrl "deployed" (Some AnalyticsMode.DefaultOn) "true"
     |> runLogged log
     |> ignore

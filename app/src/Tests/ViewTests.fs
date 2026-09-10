@@ -203,13 +203,32 @@ let tests =
         ]
 
         testList "Document" [
+            test "disabled analytics omits telemetry attributes but preserves consent in every region" {
+                let metadata : PageMetadata =
+                    { canonicalPath = "/"
+                      description = "Personal notes by Andy Meier."
+                      title = "Andy Meier" }
+                for country in [ Some "DE"; Some "US"; None ] do
+                    let policy = App.Privacy.resolve country
+                    let html =
+                        Document.primary(metadata, Page.primary (div { "Hello" }), None, policy)
+                        |> Render.toHtmlDocString
+                    Expect.isFalse (html.Contains "data-otel-endpoint") "no public endpoint"
+                    Expect.isFalse (html.Contains "data-telemetry-src") "no telemetry module attribute"
+                    Expect.isFalse (html.Contains "/scripts/telemetry") "no eager or deferred telemetry source"
+                    Expect.stringContains html "src=\"/scripts/privacy.js\"" "consent controller remains"
+                    Expect.stringContains html $"data-analytics-mode=\"{App.Privacy.analyticsModeValue policy}\"" "regional policy remains"
+                    for control in [ "Analytics settings"; "Accept analytics"; "Decline analytics" ] do
+                        Expect.stringContains html control "consent controls remain usable"
+            }
+
             test "includes patchable metadata, navigation, and delayed analytics loading" {
                 let metadata : PageMetadata =
                     { canonicalPath = "/"
                       description = "Personal notes by Andy Meier."
                       title = "Andy Meier" }
                 let privacyPolicy = App.Privacy.resolve (Some "DE")
-                let doc = Document.primary(metadata, Page.primary (div { "Hello" }), "https://otel.meiermade.com", privacyPolicy, "nav-home")
+                let doc = Document.primary(metadata, Page.primary (div { "Hello" }), Some "https://otel.meiermade.com", privacyPolicy, "nav-home")
 
                 let html = Render.toHtmlDocString doc
 
